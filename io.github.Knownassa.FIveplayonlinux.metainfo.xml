@@ -20,6 +20,12 @@
     <binary>fiveplayonlinux</binary>
   </provides>
   <releases>
+    <release version="0.2.1" date="2026-10-31">
+      <description>
+        <p>Adds a graphics stability guard, exact render-node pinning, safe
+        hybrid-GPU selection, and automatic cache reset when adapters change.</p>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-10-31">
       <description>
         <p>Adds Vulkan GPU preflight checks, automatic device selection, launch

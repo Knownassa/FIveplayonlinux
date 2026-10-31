@@ -12,13 +12,15 @@ configuration and is never sent anywhere except to the selected browser.
 
 - Native GTK 4 launch panel with a compact dark interface.
 - Custom draggable title bar with working minimize, maximize, restore, and close.
-- Vulkan preflight checks and automatic compatible-GPU selection.
+- Vulkan preflight checks and stability-aware compatible-GPU selection.
 - NVIDIA PRIME and Mesa device routing with an integrated-GPU fallback.
-- WebGPU, GPU rasterization, and zero-copy launch tuning.
+- Exact render-node pinning so Chromium and WebGPU use the same adapter.
+- Graphics protection that avoids unsafe zero-copy and blocklist overrides.
+- Automatic shader/GPU cache reset when switching graphics devices.
 - Balanced, high-performance, and memory-saver session profiles.
 - Optional direct-to-fullscreen launch.
 - Advertising hosts blocked before their scripts can connect.
-- Separate browser profile without personal cookies, logins, tabs, or add-ons.
+- Separate per-GPU browser profiles without personal cookies, tabs, or add-ons.
 - No resident launcher overhead: the Rust process is replaced when play starts.
 
 ## Install
@@ -65,6 +67,7 @@ fiveplayonlinux --fullscreen
 fiveplayonlinux --performance
 fiveplayonlinux --memory-saver
 fiveplayonlinux --integrated
+fiveplayonlinux --no-graphics-guard
 fiveplayonlinux --no-adblock
 fiveplayonlinux --url <secure-launch-address>
 fiveplayonlinux --dry-run

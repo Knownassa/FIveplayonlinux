@@ -49,8 +49,12 @@ impl GpuInfo {
 
     pub fn score(&self) -> u64 {
         let kind = match self.kind {
+            // A small dedicated adapter can be faster, but its hard VRAM ceiling is
+            // also the most common cause of WebGPU device loss. Prefer an integrated
+            // adapter with shared memory when the discrete adapter has under 4 GiB.
+            GpuKind::Discrete if self.device_local_memory < 4 * 1024 * 1024 * 1024 => 700,
             GpuKind::Discrete => 1_000,
-            GpuKind::Integrated => 600,
+            GpuKind::Integrated => 800,
             GpuKind::Virtual => 300,
             GpuKind::Other => 200,
             GpuKind::Cpu => 0,
@@ -105,6 +109,16 @@ impl GpuInfo {
             return format!("ready with texture fallback · Vulkan {}", self.api_label());
         }
         format!("ready · Vulkan {} · BC textures", self.api_label())
+    }
+
+    pub fn stability_note(&self) -> &'static str {
+        if self.kind.is_discrete() && self.device_local_memory < 4 * 1024 * 1024 * 1024 {
+            "limited dedicated memory; use medium game textures"
+        } else if matches!(self.kind, GpuKind::Integrated) {
+            "shared-memory stability fallback"
+        } else {
+            "recommended for high-performance WebGPU"
+        }
     }
 }
 
@@ -219,10 +233,19 @@ mod tests {
     }
 
     #[test]
-    fn dedicated_device_is_recommended() {
+    fn integrated_device_is_safer_than_low_memory_discrete() {
         let devices = vec![
             device("integrated", GpuKind::Integrated, 16),
             device("dedicated", GpuKind::Discrete, 2),
+        ];
+        assert_eq!(select(&devices, None, false).unwrap().name, "integrated");
+    }
+
+    #[test]
+    fn capable_dedicated_device_is_recommended() {
+        let devices = vec![
+            device("integrated", GpuKind::Integrated, 16),
+            device("dedicated", GpuKind::Discrete, 8),
         ];
         assert_eq!(select(&devices, None, false).unwrap().name, "dedicated");
     }

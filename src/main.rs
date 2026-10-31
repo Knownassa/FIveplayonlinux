@@ -54,6 +54,7 @@ struct Options {
     dry_run: bool,
     fullscreen: bool,
     graphics_check: bool,
+    graphics_guard: bool,
     integrated_gpu: bool,
     performance: PerformanceMode,
     selected_gpu: Option<String>,
@@ -114,11 +115,11 @@ fn run() -> Result<(), String> {
         .map_err(|error| format!("cannot create {}: {error}", profile.display()))?;
 
     if options.dry_run {
-        print_command(&game_command(&browser, &profile, &options)?);
+        print_command(&game_command(&browser, &profile, &options, false)?);
         return Ok(());
     }
     if options.direct_launch {
-        return exec_game(game_command(&browser, &profile, &options)?, &browser);
+        return exec_game(game_command(&browser, &profile, &options, true)?, &browser);
     }
     run_interface(browser, profile, options);
     Ok(())
@@ -132,6 +133,7 @@ fn parse_args() -> Result<Options, String> {
         dry_run: false,
         fullscreen: load_saved_value("fullscreen").as_deref() == Some("true"),
         graphics_check: false,
+        graphics_guard: load_saved_value("graphics-guard").as_deref() != Some("false"),
         integrated_gpu: false,
         performance: match load_saved_value("performance").as_deref() {
             Some("performance") => PerformanceMode::Performance,
@@ -159,6 +161,7 @@ fn parse_args() -> Result<Options, String> {
             Some("--dry-run") => options.dry_run = true,
             Some("--fullscreen") => options.fullscreen = true,
             Some("--graphics-check") => options.graphics_check = true,
+            Some("--no-graphics-guard") => options.graphics_guard = false,
             Some("--integrated") => options.integrated_gpu = true,
             Some("--performance") => options.performance = PerformanceMode::Performance,
             Some("--memory-saver") => options.performance = PerformanceMode::MemorySaver,
@@ -186,6 +189,7 @@ fn print_help() {
            --play            Skip the interface and launch immediately\n\
            --fullscreen      Start the game in fullscreen mode\n\
            --graphics-check  Print the Vulkan compatibility report\n\
+           --no-graphics-guard  Allow experimental, less stable GPU flags\n\
            --performance     Prefer maximum foreground performance\n\
            --memory-saver    Limit browser processes to reduce memory\n\
            --no-adblock      Allow the site's advertising hosts\n\
@@ -220,7 +224,12 @@ fn print_graphics_check() -> Result<(), String> {
     Ok(())
 }
 
-fn game_command(browser: &Path, profile: &Path, options: &Options) -> Result<Command, String> {
+fn game_command(
+    browser: &Path,
+    profile: &Path,
+    options: &Options,
+    prepare_profile: bool,
+) -> Result<Command, String> {
     let devices = gpu::probe()?;
     let selected = gpu::select(
         &devices,
@@ -228,7 +237,21 @@ fn game_command(browser: &Path, profile: &Path, options: &Options) -> Result<Com
         options.integrated_gpu,
     )
     .ok_or_else(|| "No compatible Vulkan graphics device was found.".to_owned())?;
-    game_command_for_gpu(browser, profile, options, &selected)
+    let selected_profile = gpu_profile_dir(profile, &selected);
+    if prepare_profile {
+        fs::create_dir_all(&selected_profile).map_err(|error| {
+            format!(
+                "cannot create graphics profile {}: {error}",
+                selected_profile.display()
+            )
+        })?;
+        prepare_gpu_profile(&selected_profile, &selected)?;
+    }
+    game_command_for_gpu(browser, &selected_profile, options, &selected)
+}
+
+fn gpu_profile_dir(profile: &Path, gpu: &GpuInfo) -> PathBuf {
+    profile.join(format!("gpu-{:04x}-{:04x}", gpu.vendor_id, gpu.device_id))
 }
 
 fn game_command_for_gpu(
@@ -259,13 +282,16 @@ fn add_browser_args(command: &mut Command, profile: &Path, options: &Options) {
         .arg("--disable-sync")
         .arg("--enable-gpu-rasterization")
         .arg("--enable-unsafe-webgpu")
-        .arg("--enable-zero-copy")
-        .arg("--ignore-gpu-blocklist")
         .arg(format!(
             "--renderer-process-limit={}",
             options.performance.renderer_limit()
         ))
         .arg("--ozone-platform-hint=auto");
+    if !options.graphics_guard {
+        command
+            .arg("--enable-zero-copy")
+            .arg("--ignore-gpu-blocklist");
+    }
     if options.performance == PerformanceMode::Performance {
         command
             .arg("--disable-background-timer-throttling")
@@ -281,6 +307,9 @@ fn add_browser_args(command: &mut Command, profile: &Path, options: &Options) {
 }
 
 fn configure_gpu(command: &mut Command, gpu: &GpuInfo) {
+    if let Some(render_node) = render_node_for(gpu) {
+        command.arg(format!("--render-node-override={}", render_node.display()));
+    }
     if gpu.kind.is_discrete() {
         command.env("DRI_PRIME", "1");
         if gpu.vendor_id == 0x10de {
@@ -298,6 +327,72 @@ fn configure_gpu(command: &mut Command, gpu: &GpuInfo) {
     } else if matches!(gpu.kind, GpuKind::Integrated) {
         command.env("DRI_PRIME", "0");
     }
+}
+
+fn render_node_for(gpu: &GpuInfo) -> Option<PathBuf> {
+    let drm = Path::new("/sys/class/drm");
+    let entries = fs::read_dir(drm).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("renderD") {
+            continue;
+        }
+        let device = entry.path().join("device");
+        let Some(vendor) = read_hex_value(&device.join("vendor")) else {
+            continue;
+        };
+        let Some(device_id) = read_hex_value(&device.join("device")) else {
+            continue;
+        };
+        if vendor == gpu.vendor_id && device_id == gpu.device_id {
+            return Some(Path::new("/dev/dri").join(name));
+        }
+    }
+    None
+}
+
+fn read_hex_value(path: &Path) -> Option<u32> {
+    let value = fs::read_to_string(path).ok()?;
+    u32::from_str_radix(value.trim().trim_start_matches("0x"), 16).ok()
+}
+
+fn prepare_gpu_profile(profile: &Path, gpu: &GpuInfo) -> Result<(), String> {
+    let fingerprint = format!(
+        "{:04x}:{:04x}:{}:{}",
+        gpu.vendor_id, gpu.device_id, gpu.api_version, gpu.name
+    );
+    let fingerprint_file = profile.join(".fiveplay-gpu-fingerprint");
+    let unchanged = fs::read_to_string(&fingerprint_file)
+        .map(|value| value.trim() == fingerprint)
+        .unwrap_or(false);
+    if unchanged {
+        return Ok(());
+    }
+
+    for relative in [
+        "GPUCache",
+        "GrShaderCache",
+        "ShaderCache",
+        "GraphiteDawnCache",
+        "Default/GPUCache",
+        "Default/GrShaderCache",
+        "Default/ShaderCache",
+        "Default/DawnCache",
+        "Default/DawnGraphiteCache",
+    ] {
+        let cache = profile.join(relative);
+        if cache.is_dir() {
+            fs::remove_dir_all(&cache).map_err(|error| {
+                format!("cannot reset graphics cache {}: {error}", cache.display())
+            })?;
+        } else if cache.is_file() {
+            fs::remove_file(&cache).map_err(|error| {
+                format!("cannot reset graphics cache {}: {error}", cache.display())
+            })?;
+        }
+    }
+    fs::write(&fingerprint_file, format!("{fingerprint}\n"))
+        .map_err(|error| format!("cannot save graphics fingerprint: {error}"))
 }
 
 fn exec_game(mut command: Command, browser: &Path) -> Result<(), String> {
@@ -450,7 +545,14 @@ fn build_window(
     }
     let graphics_detail = compatible_gpus
         .get(selected_index)
-        .map(|device| format!("{} · {}", device.name, device.readiness()))
+        .map(|device| {
+            format!(
+                "{} · {} · {}",
+                device.name,
+                device.readiness(),
+                device.stability_note()
+            )
+        })
         .unwrap_or_else(|| graphics_message.clone());
     let graphics_detail_label = label(&graphics_detail, "setting-copy");
     let graphics_detail_for_change = graphics_detail_label.clone();
@@ -458,9 +560,10 @@ fn build_window(
     gpu_dropdown.connect_selected_notify(move |dropdown| {
         if let Some(device) = compatible_for_change.get(dropdown.selected() as usize) {
             graphics_detail_for_change.set_text(&format!(
-                "{} · {}",
+                "{} · {} · {}",
                 device.name,
-                device.readiness()
+                device.readiness(),
+                device.stability_note()
             ));
         }
     });
@@ -480,6 +583,10 @@ fn build_window(
         .active(options.ad_block)
         .valign(gtk::Align::Center)
         .build();
+    let guard_switch = gtk::Switch::builder()
+        .active(options.graphics_guard)
+        .valign(gtk::Align::Center)
+        .build();
     settings.append(&setting_row(
         "Launch address",
         "Stored only in your local configuration, never in the project source.",
@@ -496,6 +603,12 @@ fn build_window(
         "Session profile",
         "Performance keeps the game responsive; Memory saver reduces processes.",
         &performance_dropdown,
+    ));
+    settings.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    settings.append(&setting_row(
+        "Graphics protection",
+        "Pins the chosen render device and avoids unsafe zero-copy/blocklist overrides.",
+        &guard_switch,
     ));
     settings.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     settings.append(&setting_row(
@@ -542,6 +655,7 @@ fn build_window(
         let launch_options = Options {
             ad_block: block_switch.is_active(),
             fullscreen: fullscreen_switch.is_active(),
+            graphics_guard: guard_switch.is_active(),
             integrated_gpu: matches!(selected_gpu.kind, GpuKind::Integrated),
             performance: PerformanceMode::from_index(performance_dropdown.selected()),
             selected_gpu: Some(selected_gpu.name.clone()),
@@ -566,7 +680,7 @@ fn build_window(
         status_for_click.set_text("Starting the WebGPU client…");
         status_for_click.remove_css_class("error-copy");
         window_for_click.set_sensitive(false);
-        let mut command = match game_command(&browser, &profile, &launch_options) {
+        let mut command = match game_command(&browser, &profile, &launch_options, true) {
             Ok(command) => command,
             Err(error) => {
                 window_for_click.set_sensitive(true);
@@ -726,6 +840,14 @@ fn save_launch_preferences(options: &Options) -> Result<(), String> {
         "fullscreen",
         if options.fullscreen { "true" } else { "false" },
     )?;
+    save_config_value(
+        "graphics-guard",
+        if options.graphics_guard {
+            "true"
+        } else {
+            "false"
+        },
+    )?;
     if let Some(gpu) = &options.selected_gpu {
         save_config_value("graphics-device", gpu)?;
     }
@@ -862,6 +984,7 @@ mod tests {
             dry_run: false,
             fullscreen: false,
             graphics_check: false,
+            graphics_guard: true,
             integrated_gpu: false,
             performance: PerformanceMode::Balanced,
             selected_gpu: None,
@@ -878,6 +1001,8 @@ mod tests {
             .expect("ad-block resolver rules missing");
         assert!(rules.contains("quge5.com"));
         assert!(rules.contains("alwingulla.com"));
+        assert!(!args.iter().any(|arg| arg == "--enable-zero-copy"));
+        assert!(!args.iter().any(|arg| arg == "--ignore-gpu-blocklist"));
     }
 
     #[test]
@@ -890,6 +1015,7 @@ mod tests {
             dry_run: false,
             fullscreen: true,
             graphics_check: false,
+            graphics_guard: true,
             integrated_gpu: false,
             performance: PerformanceMode::Performance,
             selected_gpu: None,
