@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>io.github.Knownassa.FIveplayonlinux</id>
   <name>Play V2 Fiveplay</name>
-  <summary>Native Linux client with dedicated-GPU support</summary>
+  <summary>Native Linux client with GPU control and a live performance HUD</summary>
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
   <developer id="io.github.knownassa">
@@ -20,6 +20,12 @@
     <binary>fiveplayonlinux</binary>
   </provides>
   <releases>
+    <release version="0.3.0" date="2026-10-31">
+      <description>
+        <p>Adds a gamified launcher command center and a collapsible in-game
+        performance HUD with FPS, frame-time, memory and load telemetry.</p>
+      </description>
+    </release>
     <release version="0.2.1" date="2026-10-31">
       <description>
         <p>Adds a graphics stability guard, exact render-node pinning, safe

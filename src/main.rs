@@ -27,11 +27,15 @@ window { background: #080b10; color: #f4f7f8; }
 .hero-title { font-size: 31px; font-weight: 900; }
 .hero-copy { color: #b8c3c8; font-size: 14px; }
 .v-badge { background: #75e7a7; color: #07130c; border-radius: 18px; font-size: 32px; font-weight: 1000; min-width: 72px; min-height: 72px; }
+.live-pill { background: rgba(113,230,166,0.12); color: #75e7a7; border: 1px solid rgba(113,230,166,0.24); border-radius: 999px; padding: 5px 10px; font-size: 10px; font-weight: 900; letter-spacing: 1px; }
 .section-title { font-size: 13px; font-weight: 800; color: #d8dfe2; }
-.feature-card { background: #11161d; border: 1px solid rgba(255,255,255,0.08); border-radius: 17px; padding: 17px; }
+.feature-card { background-image: linear-gradient(145deg, #141b22, #0e141a); border: 1px solid rgba(255,255,255,0.08); border-radius: 17px; padding: 17px; }
 .feature-icon { color: #75e7a7; }
 .feature-title { font-weight: 800; font-size: 14px; }
 .feature-copy { color: #919da3; font-size: 12px; }
+.telemetry-preview { background: #0a1015; border: 1px solid rgba(113,230,166,0.18); border-radius: 16px; padding: 12px; }
+.telemetry-label { color: #65736e; font-size: 9px; font-weight: 800; letter-spacing: 1px; }
+.telemetry-value { color: #dff8e9; font-size: 12px; font-weight: 900; }
 .ready-copy { color: #71e6a6; font-size: 12px; font-weight: 700; }
 .warning-copy { color: #f0bf68; font-size: 12px; font-weight: 700; }
 .settings-card { background: #0e1319; border: 1px solid rgba(255,255,255,0.07); border-radius: 18px; padding: 8px 18px; }
@@ -57,6 +61,7 @@ struct Options {
     graphics_guard: bool,
     integrated_gpu: bool,
     performance: PerformanceMode,
+    performance_hud: bool,
     selected_gpu: Option<String>,
     url: String,
 }
@@ -141,6 +146,7 @@ fn parse_args() -> Result<Options, String> {
             _ => PerformanceMode::Balanced,
         },
         selected_gpu: load_saved_value("graphics-device"),
+        performance_hud: load_saved_value("performance-hud").as_deref() != Some("false"),
         url: load_saved_url().unwrap_or_default(),
     };
     let mut args = env::args_os().skip(1);
@@ -165,6 +171,7 @@ fn parse_args() -> Result<Options, String> {
             Some("--integrated") => options.integrated_gpu = true,
             Some("--performance") => options.performance = PerformanceMode::Performance,
             Some("--memory-saver") => options.performance = PerformanceMode::MemorySaver,
+            Some("--no-hud") => options.performance_hud = false,
             Some("--no-adblock") => options.ad_block = false,
             Some("--play") => options.direct_launch = true,
             Some("-h" | "--help") => {
@@ -192,6 +199,7 @@ fn print_help() {
            --no-graphics-guard  Allow experimental, less stable GPU flags\n\
            --performance     Prefer maximum foreground performance\n\
            --memory-saver    Limit browser processes to reduce memory\n\
+           --no-hud          Disable the in-game performance HUD\n\
            --no-adblock      Allow the site's advertising hosts\n\
            --browser PATH    Use a specific Chromium-family executable\n\
            --url URL         Use a secure Play V2 launch address\n\
@@ -262,12 +270,24 @@ fn game_command_for_gpu(
 ) -> Result<Command, String> {
     validate_url(&options.url)?;
     let mut command = Command::new(browser);
-    add_browser_args(&mut command, profile, options);
+    let hud_extension = if options.performance_hud {
+        Some(find_hud_extension().ok_or_else(|| {
+            "the performance HUD files are missing; reinstall FIveplayonlinux".to_owned()
+        })?)
+    } else {
+        None
+    };
+    add_browser_args(&mut command, profile, options, hud_extension.as_deref());
     configure_gpu(&mut command, selected_gpu);
     Ok(command)
 }
 
-fn add_browser_args(command: &mut Command, profile: &Path, options: &Options) {
+fn add_browser_args(
+    command: &mut Command,
+    profile: &Path,
+    options: &Options,
+    hud_extension: Option<&Path>,
+) {
     command
         .arg(format!("--app={}", options.url))
         .arg(format!("--user-data-dir={}", profile.display()))
@@ -278,7 +298,6 @@ fn add_browser_args(command: &mut Command, profile: &Path, options: &Options) {
         .arg("--disable-background-networking")
         .arg("--disable-background-mode")
         .arg("--disable-component-update")
-        .arg("--disable-extensions")
         .arg("--disable-sync")
         .arg("--enable-gpu-rasterization")
         .arg("--enable-unsafe-webgpu")
@@ -287,6 +306,16 @@ fn add_browser_args(command: &mut Command, profile: &Path, options: &Options) {
             options.performance.renderer_limit()
         ))
         .arg("--ozone-platform-hint=auto");
+    if let Some(extension) = hud_extension {
+        command
+            .arg(format!(
+                "--disable-extensions-except={}",
+                extension.display()
+            ))
+            .arg(format!("--load-extension={}", extension.display()));
+    } else {
+        command.arg("--disable-extensions");
+    }
     if !options.graphics_guard {
         command
             .arg("--enable-zero-copy")
@@ -304,6 +333,23 @@ fn add_browser_args(command: &mut Command, profile: &Path, options: &Options) {
     if options.ad_block {
         command.arg(format!("--host-resolver-rules={AD_BLOCK_RULES}"));
     }
+}
+
+fn find_hud_extension() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = env::var_os("FIVEPLAY_HUD_EXTENSION") {
+        candidates.push(PathBuf::from(path));
+    }
+    if let Some(path) = env::var_os("XDG_DATA_HOME") {
+        candidates.push(PathBuf::from(path).join("fiveplayonlinux/hud-extension"));
+    } else if let Some(home) = env::var_os("HOME") {
+        candidates.push(PathBuf::from(home).join(".local/share/fiveplayonlinux/hud-extension"));
+    }
+    candidates.push(PathBuf::from("/usr/share/fiveplayonlinux/hud-extension"));
+    candidates.push(Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/hud-extension"));
+    candidates
+        .into_iter()
+        .find(|path| path.join("manifest.json").is_file() && path.join("hud.js").is_file())
 }
 
 fn configure_gpu(command: &mut Command, gpu: &GpuInfo) {
@@ -486,8 +532,15 @@ fn build_window(
     badge.set_halign(gtk::Align::Center);
     badge.set_valign(gtk::Align::Center);
     badge.add_css_class("v-badge");
+    let hero_status = gtk::Box::new(gtk::Orientation::Vertical, 9);
+    hero_status.set_halign(gtk::Align::Center);
+    hero_status.set_valign(gtk::Align::Center);
+    let live = gtk::Label::new(Some("SYSTEM READY"));
+    live.add_css_class("live-pill");
+    hero_status.append(&badge);
+    hero_status.append(&live);
     hero.append(&hero_text);
-    hero.append(&badge);
+    hero.append(&hero_status);
     shell.append(&hero);
 
     let feature_title = label("READY TO PLAY", "section-title");
@@ -508,8 +561,21 @@ fn build_window(
         "Clean session",
         "Ad hosts blocked early",
     ));
-    features.append(&feature_card("⚡", "WebGPU ready", "Acceleration enforced"));
+    features.append(&feature_card(
+        "◰",
+        "Live performance HUD",
+        "FPS and frame pacing",
+    ));
     shell.append(&features);
+
+    let telemetry = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    telemetry.add_css_class("telemetry-preview");
+    telemetry.set_homogeneous(true);
+    telemetry.append(&telemetry_chip("FPS MONITOR", "LIVE GRAPH"));
+    telemetry.append(&telemetry_chip("FRAME TIME", "REAL TIME"));
+    telemetry.append(&telemetry_chip("MEMORY", "PRESSURE"));
+    telemetry.append(&telemetry_chip("HOTKEY", "ALT + P"));
+    shell.append(&telemetry);
 
     let settings = gtk::Box::new(gtk::Orientation::Vertical, 0);
     settings.add_css_class("settings-card");
@@ -587,6 +653,10 @@ fn build_window(
         .active(options.graphics_guard)
         .valign(gtk::Align::Center)
         .build();
+    let hud_switch = gtk::Switch::builder()
+        .active(options.performance_hud)
+        .valign(gtk::Align::Center)
+        .build();
     settings.append(&setting_row(
         "Launch address",
         "Stored only in your local configuration, never in the project source.",
@@ -609,6 +679,12 @@ fn build_window(
         "Graphics protection",
         "Pins the chosen render device and avoids unsafe zero-copy/blocklist overrides.",
         &guard_switch,
+    ));
+    settings.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    settings.append(&setting_row(
+        "In-game performance HUD",
+        "Collapsible FPS, frame-time, memory and load panel. Toggle with Alt + P.",
+        &hud_switch,
     ));
     settings.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     settings.append(&setting_row(
@@ -658,6 +734,7 @@ fn build_window(
             graphics_guard: guard_switch.is_active(),
             integrated_gpu: matches!(selected_gpu.kind, GpuKind::Integrated),
             performance: PerformanceMode::from_index(performance_dropdown.selected()),
+            performance_hud: hud_switch.is_active(),
             selected_gpu: Some(selected_gpu.name.clone()),
             url: address_entry.text().trim().to_owned(),
             ..options.clone()
@@ -773,6 +850,14 @@ fn feature_card(symbol: &str, title: &str, copy: &str) -> gtk::Box {
     card
 }
 
+fn telemetry_chip(title: &str, value: &str) -> gtk::Box {
+    let chip = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    chip.set_halign(gtk::Align::Center);
+    chip.append(&label(title, "telemetry-label"));
+    chip.append(&label(value, "telemetry-value"));
+    chip
+}
+
 fn setting_row(title: &str, copy: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
     let detail = label(copy, "setting-copy");
     setting_row_with_detail(title, &detail, control)
@@ -843,6 +928,14 @@ fn save_launch_preferences(options: &Options) -> Result<(), String> {
     save_config_value(
         "graphics-guard",
         if options.graphics_guard {
+            "true"
+        } else {
+            "false"
+        },
+    )?;
+    save_config_value(
+        "performance-hud",
+        if options.performance_hud {
             "true"
         } else {
             "false"
@@ -987,10 +1080,11 @@ mod tests {
             graphics_guard: true,
             integrated_gpu: false,
             performance: PerformanceMode::Balanced,
+            performance_hud: true,
             selected_gpu: None,
             url: "https://example.invalid/launcher".to_owned(),
         };
-        add_browser_args(&mut command, Path::new("/tmp/profile"), &options);
+        add_browser_args(&mut command, Path::new("/tmp/profile"), &options, None);
         let args: Vec<_> = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -1018,10 +1112,11 @@ mod tests {
             graphics_guard: true,
             integrated_gpu: false,
             performance: PerformanceMode::Performance,
+            performance_hud: true,
             selected_gpu: None,
             url: "https://example.invalid/launcher".to_owned(),
         };
-        add_browser_args(&mut command, Path::new("/tmp/profile"), &options);
+        add_browser_args(&mut command, Path::new("/tmp/profile"), &options, None);
         let args: Vec<_> = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -1034,5 +1129,42 @@ mod tests {
         ] {
             assert!(args.iter().any(|arg| arg == expected));
         }
+    }
+
+    #[test]
+    fn performance_hud_extension_is_the_only_enabled_extension() {
+        let mut command = Command::new("browser");
+        let options = Options {
+            ad_block: false,
+            browser: None,
+            direct_launch: false,
+            dry_run: false,
+            fullscreen: false,
+            graphics_check: false,
+            graphics_guard: true,
+            integrated_gpu: false,
+            performance: PerformanceMode::Balanced,
+            performance_hud: true,
+            selected_gpu: None,
+            url: "https://example.invalid/launcher".to_owned(),
+        };
+        let extension = Path::new("/opt/fiveplay/hud-extension");
+        add_browser_args(
+            &mut command,
+            Path::new("/tmp/profile"),
+            &options,
+            Some(extension),
+        );
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert!(args
+            .iter()
+            .any(|arg| arg == "--load-extension=/opt/fiveplay/hud-extension"));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "--disable-extensions-except=/opt/fiveplay/hud-extension"));
+        assert!(!args.iter().any(|arg| arg == "--disable-extensions"));
     }
 }

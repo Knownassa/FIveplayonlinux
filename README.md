@@ -17,6 +17,8 @@ configuration and is never sent anywhere except to the selected browser.
 - Exact render-node pinning so Chromium and WebGPU use the same adapter.
 - Graphics protection that avoids unsafe zero-copy and blocklist overrides.
 - Automatic shader/GPU cache reset when switching graphics devices.
+- Collapsible in-game HUD with browser FPS, frame time, JS memory, long-task
+  pressure, session health, and a rolling performance graph.
 - Balanced, high-performance, and memory-saver session profiles.
 - Optional direct-to-fullscreen launch.
 - Advertising hosts blocked before their scripts can connect.
@@ -68,6 +70,7 @@ fiveplayonlinux --performance
 fiveplayonlinux --memory-saver
 fiveplayonlinux --integrated
 fiveplayonlinux --no-graphics-guard
+fiveplayonlinux --no-hud
 fiveplayonlinux --no-adblock
 fiveplayonlinux --url <secure-launch-address>
 fiveplayonlinux --dry-run
@@ -76,6 +79,10 @@ fiveplayonlinux --dry-run
 The saved launch address lives under the XDG configuration directory. Browser
 data lives under the XDG data directory in a separate `fiveplayonlinux`
 profile.
+
+The HUD runs entirely inside the isolated game window and does not send
+telemetry anywhere. Its FPS value measures the browser display cadence rather
+than a private game-engine counter. Collapse or expand it with `Alt+P`.
 
 ## License
 

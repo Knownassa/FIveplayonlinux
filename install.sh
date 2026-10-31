@@ -43,16 +43,20 @@ fi
 desktop_source="$project_dir/io.github.Knownassa.FIveplayonlinux.desktop"
 icon_source="$project_dir/assets/fiveplayonlinux.svg"
 metainfo_source="$project_dir/io.github.Knownassa.FIveplayonlinux.metainfo.xml"
+hud_source="$project_dir/assets/hud-extension"
 if [[ -f "$project_dir/usr/share/applications/io.github.Knownassa.FIveplayonlinux.desktop" ]]; then
   desktop_source="$project_dir/usr/share/applications/io.github.Knownassa.FIveplayonlinux.desktop"
   icon_source="$project_dir/usr/share/icons/hicolor/scalable/apps/fiveplayonlinux.svg"
   metainfo_source="$project_dir/usr/share/metainfo/io.github.Knownassa.FIveplayonlinux.metainfo.xml"
+  hud_source="$project_dir/usr/share/fiveplayonlinux/hud-extension"
 fi
 
 install -Dm755 "$binary" "$bin_root/fiveplayonlinux"
 install -Dm644 "$desktop_source" "$application_root/io.github.Knownassa.FIveplayonlinux.desktop"
 install -Dm644 "$icon_source" "$icon_root/fiveplayonlinux.svg"
 install -Dm644 "$metainfo_source" "$metainfo_root/io.github.Knownassa.FIveplayonlinux.metainfo.xml"
+install -Dm644 "$hud_source/manifest.json" "$install_root/fiveplayonlinux/hud-extension/manifest.json"
+install -Dm644 "$hud_source/hud.js" "$install_root/fiveplayonlinux/hud-extension/hud.js"
 
 command -v update-desktop-database >/dev/null && update-desktop-database "$application_root" || true
 command -v gtk4-update-icon-cache >/dev/null && gtk4-update-icon-cache -f -t "${install_root}/icons/hicolor" >/dev/null || true

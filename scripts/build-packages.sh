@@ -24,6 +24,10 @@ install -Dm644 "$project_dir/assets/fiveplayonlinux.svg" \
   "$stage/usr/share/icons/hicolor/scalable/apps/fiveplayonlinux.svg"
 install -Dm644 "$project_dir/io.github.Knownassa.FIveplayonlinux.metainfo.xml" \
   "$stage/usr/share/metainfo/io.github.Knownassa.FIveplayonlinux.metainfo.xml"
+install -Dm644 "$project_dir/assets/hud-extension/manifest.json" \
+  "$stage/usr/share/fiveplayonlinux/hud-extension/manifest.json"
+install -Dm644 "$project_dir/assets/hud-extension/hud.js" \
+  "$stage/usr/share/fiveplayonlinux/hud-extension/hud.js"
 install -Dm644 "$project_dir/LICENSE" "$stage/usr/share/licenses/fiveplayonlinux/LICENSE"
 install -Dm644 "$project_dir/README.md" "$stage/README.md"
 install -Dm755 "$project_dir/install.sh" "$stage/install.sh"
@@ -49,6 +53,8 @@ if command -v rpmbuild >/dev/null; then
   install -Dm644 "$project_dir/assets/fiveplayonlinux.svg" "$rpm_root/SOURCES/fiveplayonlinux.svg"
   install -Dm644 "$project_dir/LICENSE" "$rpm_root/SOURCES/LICENSE"
   install -Dm644 "$project_dir/io.github.Knownassa.FIveplayonlinux.metainfo.xml" "$rpm_root/SOURCES/io.github.Knownassa.FIveplayonlinux.metainfo.xml"
+  install -Dm644 "$project_dir/assets/hud-extension/manifest.json" "$rpm_root/SOURCES/hud-manifest.json"
+  install -Dm644 "$project_dir/assets/hud-extension/hud.js" "$rpm_root/SOURCES/hud.js"
   sed "s/@VERSION@/$version/g" "$project_dir/packaging/fiveplayonlinux.spec" > "$rpm_root/SPECS/fiveplayonlinux.spec"
   rpmbuild -bb --define "_topdir $rpm_root" "$rpm_root/SPECS/fiveplayonlinux.spec"
   find "$rpm_root/RPMS" -type f -name '*.rpm' -exec cp {} "$out_dir/" \;

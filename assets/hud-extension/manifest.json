@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "FIveplayonlinux Performance HUD",
+  "version": "0.3.0",
+  "description": "Local, collapsible performance telemetry for the FIveplayonlinux game window.",
+  "content_scripts": [
+    {
+      "matches": ["https://*/*", "http://localhost/*"],
+      "js": ["hud.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

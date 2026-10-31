@@ -7,6 +7,8 @@ targets=(
   "$install_root/applications/io.github.Knownassa.FIveplayonlinux.desktop"
   "$install_root/icons/hicolor/scalable/apps/fiveplayonlinux.svg"
   "$install_root/metainfo/io.github.Knownassa.FIveplayonlinux.metainfo.xml"
+  "$install_root/fiveplayonlinux/hud-extension/manifest.json"
+  "$install_root/fiveplayonlinux/hud-extension/hud.js"
 )
 
 for target in "${targets[@]}"; do

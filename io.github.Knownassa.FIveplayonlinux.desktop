@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Play V2 Fiveplay
-Comment=Launch Play V2 Fiveplay with dedicated-GPU acceleration
+Comment=Play with GPU acceleration and a live performance HUD
 Exec=fiveplayonlinux
 Icon=fiveplayonlinux
 Terminal=false
