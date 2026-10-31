@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Play V2 Fiveplay
+Comment=Launch Play V2 Fiveplay with dedicated-GPU acceleration
+Exec=fiveplayonlinux
+Icon=fiveplayonlinux
+Terminal=false
+Categories=Game;
+StartupWMClass=FiveplayOnLinux
+Keywords=Fiveplay;WebGPU;Linux;NVIDIA;

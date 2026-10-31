@@ -1,0 +1,33 @@
+pkgname=fiveplayonlinux
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Native Linux client for Play V2 Fiveplay'
+arch=('x86_64')
+license=('MIT')
+depends=('gtk4')
+makedepends=('cargo' 'pkgconf')
+optdepends=('chromium: supported browser engine')
+source=()
+sha256sums=()
+
+build() {
+  cd "$startdir/../.."
+  cargo build --release --locked
+}
+
+check() {
+  cd "$startdir/../.."
+  cargo test --locked
+}
+
+package() {
+  cd "$startdir/../.."
+  install -Dm755 target/release/fiveplayonlinux "$pkgdir/usr/bin/fiveplayonlinux"
+  install -Dm644 io.github.Knownassa.FIveplayonlinux.desktop \
+    "$pkgdir/usr/share/applications/io.github.Knownassa.FIveplayonlinux.desktop"
+  install -Dm644 assets/fiveplayonlinux.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/fiveplayonlinux.svg"
+  install -Dm644 io.github.Knownassa.FIveplayonlinux.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/io.github.Knownassa.FIveplayonlinux.metainfo.xml"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/fiveplayonlinux/LICENSE"
+}

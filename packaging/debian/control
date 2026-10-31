@@ -1,0 +1,11 @@
+Package: fiveplayonlinux
+Version: @VERSION@
+Section: games
+Priority: optional
+Architecture: amd64
+Maintainer: FIveplayonlinux contributors
+Depends: libgtk-4-1
+Recommends: chromium | chromium-browser | microsoft-edge-stable | brave-browser
+Description: Native Linux client for Play V2 Fiveplay
+ Dedicated-GPU selection, WebGPU tuning, an isolated profile, and ad blocking
+ in a compact GTK 4 interface.

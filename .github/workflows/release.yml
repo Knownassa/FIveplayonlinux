@@ -1,0 +1,30 @@
+name: Release packages
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  packages:
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    steps:
+      - name: Install build dependencies
+        run: dnf install -y git rust cargo gtk4-devel rpm-build binutils tar gzip
+      - uses: actions/checkout@v4
+      - name: Test
+        run: cargo test --locked
+      - name: Build distribution packages
+        run: ./scripts/build-packages.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-packages
+          path: dist/*
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
