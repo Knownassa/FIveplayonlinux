@@ -20,6 +20,12 @@
     <binary>fiveplayonlinux</binary>
   </provides>
   <releases>
+    <release version="0.2.0" date="2026-10-31">
+      <description>
+        <p>Adds Vulkan GPU preflight checks, automatic device selection, launch
+        performance profiles, fullscreen control, and custom window controls.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-10-31"/>
   </releases>
   <content_rating type="oars-1.1"/>

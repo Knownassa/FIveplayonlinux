@@ -5,6 +5,7 @@ Summary:        Native Linux client for Play V2 Fiveplay
 License:        MIT
 BuildArch:      x86_64
 Requires:       gtk4
+Requires:       vulkan-loader
 Recommends:     chromium
 Source0:        fiveplayonlinux
 Source1:        io.github.Knownassa.FIveplayonlinux.desktop

@@ -12,6 +12,13 @@ if ! pkg-config --exists gtk4 2>/dev/null; then
   echo "GTK 4 is required. Install the GTK 4 runtime for your distribution." >&2
   exit 1
 fi
+if command -v ldconfig >/dev/null; then
+  vulkan_cache=$(ldconfig -p 2>/dev/null || true)
+  if [[ "$vulkan_cache" != *libvulkan.so.1* ]]; then
+    echo "The Vulkan loader is required. Install it for your distribution." >&2
+    exit 1
+  fi
+fi
 
 binary=""
 for candidate in \

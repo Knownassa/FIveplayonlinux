@@ -11,8 +11,12 @@ configuration and is never sent anywhere except to the selected browser.
 ## Features
 
 - Native GTK 4 launch panel with a compact dark interface.
-- NVIDIA PRIME offload with an integrated-GPU fallback.
+- Custom draggable title bar with working minimize, maximize, restore, and close.
+- Vulkan preflight checks and automatic compatible-GPU selection.
+- NVIDIA PRIME and Mesa device routing with an integrated-GPU fallback.
 - WebGPU, GPU rasterization, and zero-copy launch tuning.
+- Balanced, high-performance, and memory-saver session profiles.
+- Optional direct-to-fullscreen launch.
 - Advertising hosts blocked before their scripts can connect.
 - Separate browser profile without personal cookies, logins, tabs, or add-ons.
 - No resident launcher overhead: the Rust process is replaced when play starts.
@@ -56,6 +60,10 @@ Artifacts are written to `dist/`.
 
 ```text
 fiveplayonlinux --play
+fiveplayonlinux --graphics-check
+fiveplayonlinux --fullscreen
+fiveplayonlinux --performance
+fiveplayonlinux --memory-saver
 fiveplayonlinux --integrated
 fiveplayonlinux --no-adblock
 fiveplayonlinux --url <secure-launch-address>

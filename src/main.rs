@@ -1,3 +1,6 @@
+mod gpu;
+
+use gpu::{GpuInfo, GpuKind};
 use gtk::gdk;
 use gtk::prelude::*;
 use std::env;
@@ -6,12 +9,17 @@ use std::fs;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::rc::Rc;
 
 const AD_BLOCK_RULES: &str = "MAP quge5.com ~NOTFOUND, MAP *.quge5.com ~NOTFOUND, MAP alwingulla.com ~NOTFOUND, MAP *.alwingulla.com ~NOTFOUND";
 
 const CSS: &str = r#"
 window { background: #080b10; color: #f4f7f8; }
-headerbar { background: #080b10; border-bottom: 1px solid rgba(255,255,255,0.07); min-height: 52px; }
+.custom-titlebar { background: #0b0f14; border-bottom: 1px solid rgba(255,255,255,0.08); min-height: 48px; padding: 0 10px 0 16px; }
+.title-mark { background: #71e6a6; color: #07140d; border-radius: 8px; font-weight: 1000; min-width: 28px; min-height: 28px; }
+.window-control { background: transparent; border: 0; border-radius: 8px; min-width: 34px; min-height: 32px; padding: 0; }
+.window-control:hover { background: rgba(255,255,255,0.10); }
+.close-control:hover { background: #d94f5c; color: white; }
 .app-title { font-weight: 800; font-size: 15px; }
 .shell { padding: 34px; }
 .hero { background-image: linear-gradient(135deg, #172128, #102e25); border: 1px solid rgba(116,232,166,0.24); border-radius: 24px; padding: 30px; }
@@ -24,11 +32,14 @@ headerbar { background: #080b10; border-bottom: 1px solid rgba(255,255,255,0.07)
 .feature-icon { color: #75e7a7; }
 .feature-title { font-weight: 800; font-size: 14px; }
 .feature-copy { color: #919da3; font-size: 12px; }
+.ready-copy { color: #71e6a6; font-size: 12px; font-weight: 700; }
+.warning-copy { color: #f0bf68; font-size: 12px; font-weight: 700; }
 .settings-card { background: #0e1319; border: 1px solid rgba(255,255,255,0.07); border-radius: 18px; padding: 8px 18px; }
 .setting-row { padding: 11px 2px; }
 .setting-title { font-weight: 700; }
 .setting-copy { color: #89959b; font-size: 12px; }
 switch:checked { background: #58d993; }
+dropdown, entry { background: #171e26; border: 1px solid rgba(255,255,255,0.10); border-radius: 10px; min-height: 36px; }
 .play-button { background: #71e6a6; color: #07140d; border-radius: 15px; min-height: 52px; font-size: 16px; font-weight: 900; box-shadow: 0 8px 24px rgba(83,217,145,0.18); }
 .play-button:hover { background: #83edb3; }
 .status-copy { color: #829096; font-size: 12px; }
@@ -41,8 +52,37 @@ struct Options {
     browser: Option<PathBuf>,
     direct_launch: bool,
     dry_run: bool,
+    fullscreen: bool,
+    graphics_check: bool,
     integrated_gpu: bool,
+    performance: PerformanceMode,
+    selected_gpu: Option<String>,
     url: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PerformanceMode {
+    Balanced,
+    Performance,
+    MemorySaver,
+}
+
+impl PerformanceMode {
+    fn from_index(index: u32) -> Self {
+        match index {
+            1 => Self::Performance,
+            2 => Self::MemorySaver,
+            _ => Self::Balanced,
+        }
+    }
+
+    fn renderer_limit(self) -> u8 {
+        match self {
+            Self::Balanced => 6,
+            Self::Performance => 8,
+            Self::MemorySaver => 4,
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -57,6 +97,10 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let options = parse_args()?;
+    if options.graphics_check {
+        print_graphics_check()?;
+        return Ok(());
+    }
     let browser = match &options.browser {
         Some(path) => resolve_executable(path)
             .ok_or_else(|| format!("browser executable not found: {}", path.display()))?,
@@ -86,7 +130,15 @@ fn parse_args() -> Result<Options, String> {
         browser: None,
         direct_launch: false,
         dry_run: false,
+        fullscreen: load_saved_value("fullscreen").as_deref() == Some("true"),
+        graphics_check: false,
         integrated_gpu: false,
+        performance: match load_saved_value("performance").as_deref() {
+            Some("performance") => PerformanceMode::Performance,
+            Some("memory-saver") => PerformanceMode::MemorySaver,
+            _ => PerformanceMode::Balanced,
+        },
+        selected_gpu: load_saved_value("graphics-device"),
         url: load_saved_url().unwrap_or_default(),
     };
     let mut args = env::args_os().skip(1);
@@ -105,7 +157,11 @@ fn parse_args() -> Result<Options, String> {
                     .ok_or_else(|| "--url requires a valid UTF-8 URL".to_owned())?;
             }
             Some("--dry-run") => options.dry_run = true,
+            Some("--fullscreen") => options.fullscreen = true,
+            Some("--graphics-check") => options.graphics_check = true,
             Some("--integrated") => options.integrated_gpu = true,
+            Some("--performance") => options.performance = PerformanceMode::Performance,
+            Some("--memory-saver") => options.performance = PerformanceMode::MemorySaver,
             Some("--no-adblock") => options.ad_block = false,
             Some("--play") => options.direct_launch = true,
             Some("-h" | "--help") => {
@@ -128,6 +184,10 @@ fn print_help() {
          Usage: fiveplayonlinux [OPTIONS]\n\n\
          Options:\n\
            --play            Skip the interface and launch immediately\n\
+           --fullscreen      Start the game in fullscreen mode\n\
+           --graphics-check  Print the Vulkan compatibility report\n\
+           --performance     Prefer maximum foreground performance\n\
+           --memory-saver    Limit browser processes to reduce memory\n\
            --no-adblock      Allow the site's advertising hosts\n\
            --browser PATH    Use a specific Chromium-family executable\n\
            --url URL         Use a secure Play V2 launch address\n\
@@ -138,19 +198,55 @@ fn print_help() {
     );
 }
 
+fn print_graphics_check() -> Result<(), String> {
+    let devices = gpu::probe()?;
+    let compatible = gpu::compatible_devices(&devices);
+    if devices.is_empty() {
+        return Err("No Vulkan graphics devices were detected.".to_owned());
+    }
+    for device in &devices {
+        println!(
+            "{} | {} | {} | {}",
+            device.name,
+            device.kind.label(),
+            device.memory_label(),
+            device.readiness()
+        );
+    }
+    match compatible.first() {
+        Some(device) => println!("Recommended: {}", device.name),
+        None => return Err("No compatible Vulkan graphics device was found.".to_owned()),
+    }
+    Ok(())
+}
+
 fn game_command(browser: &Path, profile: &Path, options: &Options) -> Result<Command, String> {
+    let devices = gpu::probe()?;
+    let selected = gpu::select(
+        &devices,
+        options.selected_gpu.as_deref(),
+        options.integrated_gpu,
+    )
+    .ok_or_else(|| "No compatible Vulkan graphics device was found.".to_owned())?;
+    game_command_for_gpu(browser, profile, options, &selected)
+}
+
+fn game_command_for_gpu(
+    browser: &Path,
+    profile: &Path,
+    options: &Options,
+    selected_gpu: &GpuInfo,
+) -> Result<Command, String> {
     validate_url(&options.url)?;
     let mut command = Command::new(browser);
-    add_browser_args(&mut command, profile, &options.url, options.ad_block);
-    if !options.integrated_gpu {
-        configure_nvidia_prime(&mut command);
-    }
+    add_browser_args(&mut command, profile, options);
+    configure_gpu(&mut command, selected_gpu);
     Ok(command)
 }
 
-fn add_browser_args(command: &mut Command, profile: &Path, url: &str, ad_block: bool) {
+fn add_browser_args(command: &mut Command, profile: &Path, options: &Options) {
     command
-        .arg(format!("--app={url}"))
+        .arg(format!("--app={}", options.url))
         .arg(format!("--user-data-dir={}", profile.display()))
         .arg("--class=FiveplayOnLinux")
         .arg("--name=FiveplayOnLinux")
@@ -165,19 +261,43 @@ fn add_browser_args(command: &mut Command, profile: &Path, url: &str, ad_block: 
         .arg("--enable-unsafe-webgpu")
         .arg("--enable-zero-copy")
         .arg("--ignore-gpu-blocklist")
-        .arg("--renderer-process-limit=6")
+        .arg(format!(
+            "--renderer-process-limit={}",
+            options.performance.renderer_limit()
+        ))
         .arg("--ozone-platform-hint=auto");
-    if ad_block {
+    if options.performance == PerformanceMode::Performance {
+        command
+            .arg("--disable-background-timer-throttling")
+            .arg("--disable-renderer-backgrounding")
+            .arg("--disable-backgrounding-occluded-windows");
+    }
+    if options.fullscreen {
+        command.arg("--start-fullscreen");
+    }
+    if options.ad_block {
         command.arg(format!("--host-resolver-rules={AD_BLOCK_RULES}"));
     }
 }
 
-fn configure_nvidia_prime(command: &mut Command) {
-    command
-        .env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
-        .env("__NV_PRIME_RENDER_OFFLOAD", "1")
-        .env("__VK_LAYER_NV_optimus", "NVIDIA_only")
-        .env("VK_LOADER_DRIVERS_SELECT", "*nvidia*");
+fn configure_gpu(command: &mut Command, gpu: &GpuInfo) {
+    if gpu.kind.is_discrete() {
+        command.env("DRI_PRIME", "1");
+        if gpu.vendor_id == 0x10de {
+            command
+                .env("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
+                .env("__NV_PRIME_RENDER_OFFLOAD", "1")
+                .env("__VK_LAYER_NV_optimus", "NVIDIA_only")
+                .env("VK_LOADER_DRIVERS_SELECT", "*nvidia*");
+        } else {
+            command.env(
+                "MESA_VK_DEVICE_SELECT",
+                format!("{:04x}:{:04x}!", gpu.vendor_id, gpu.device_id),
+            );
+        }
+    } else if matches!(gpu.kind, GpuKind::Integrated) {
+        command.env("DRI_PRIME", "0");
+    }
 }
 
 fn exec_game(mut command: Command, browser: &Path) -> Result<(), String> {
@@ -222,15 +342,29 @@ fn build_window(
     let window = gtk::ApplicationWindow::builder()
         .application(application)
         .title("Play V2 Fiveplay")
-        .default_width(820)
-        .default_height(680)
+        .default_width(880)
+        .default_height(760)
         .resizable(true)
         .build();
-    let header = gtk::HeaderBar::new();
-    let header_title = gtk::Label::new(Some("PLAY V2 FIVEPLAY"));
-    header_title.add_css_class("app-title");
-    header.set_title_widget(Some(&header_title));
-    window.set_titlebar(Some(&header));
+    window.set_titlebar(Some(&custom_titlebar(&window)));
+
+    let (compatible_gpus, graphics_message) = match gpu::probe() {
+        Ok(devices) => {
+            let compatible = gpu::compatible_devices(&devices);
+            let message = if let Some(recommended) = compatible.first() {
+                format!(
+                    "{} selected · {}",
+                    recommended.name,
+                    recommended.readiness()
+                )
+            } else {
+                "No compatible Vulkan graphics device was found.".to_owned()
+            };
+            (compatible, message)
+        }
+        Err(error) => (Vec::new(), error),
+    };
+    let compatible_gpus = Rc::new(compatible_gpus);
 
     let shell = gtk::Box::new(gtk::Orientation::Vertical, 22);
     shell.add_css_class("shell");
@@ -243,7 +377,11 @@ fn build_window(
     let eyebrow = label("FIVEPLAYONLINUX  /  PERFORMANCE CLIENT", "eyebrow");
     let title = label("Play V2. Clean and accelerated.", "hero-title");
     let copy = label(
-        "A clean WebGPU session tuned for your NVIDIA MX130.",
+        if compatible_gpus.is_empty() {
+            "Graphics preflight needs attention before the game can start."
+        } else {
+            "A clean WebGPU session with automatic graphics-device validation."
+        },
         "hero-copy",
     );
     hero_text.append(&eyebrow);
@@ -262,20 +400,20 @@ fn build_window(
     let features = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     features.set_homogeneous(true);
     features.append(&feature_card(
-        "video-display-symbolic",
-        "Dedicated graphics",
-        "NVIDIA PRIME offload",
+        "◈",
+        "Graphics preflight",
+        if compatible_gpus.is_empty() {
+            "No compatible device"
+        } else {
+            "Vulkan device verified"
+        },
     ));
     features.append(&feature_card(
-        "security-high-symbolic",
+        "◇",
         "Clean session",
         "Ad hosts blocked early",
     ));
-    features.append(&feature_card(
-        "applications-engineering-symbolic",
-        "WebGPU ready",
-        "Acceleration enforced",
-    ));
+    features.append(&feature_card("⚡", "WebGPU ready", "Acceleration enforced"));
     shell.append(&features);
 
     let settings = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -286,8 +424,56 @@ fn build_window(
         .hexpand(false)
         .width_chars(32)
         .build();
-    let gpu_switch = gtk::Switch::builder()
-        .active(!options.integrated_gpu)
+    let gpu_labels: Vec<String> = compatible_gpus.iter().map(GpuInfo::display_label).collect();
+    let gpu_label_refs: Vec<&str> = gpu_labels.iter().map(String::as_str).collect();
+    let gpu_dropdown = gtk::DropDown::from_strings(&gpu_label_refs);
+    gpu_dropdown.set_valign(gtk::Align::Center);
+    gpu_dropdown.set_sensitive(!compatible_gpus.is_empty());
+    let requested_gpu = options.selected_gpu.as_deref();
+    let selected_index = requested_gpu
+        .and_then(|name| {
+            compatible_gpus
+                .iter()
+                .position(|device| device.name == name)
+        })
+        .or_else(|| {
+            options.integrated_gpu.then(|| {
+                compatible_gpus
+                    .iter()
+                    .position(|device| matches!(device.kind, GpuKind::Integrated))
+                    .unwrap_or(0)
+            })
+        })
+        .unwrap_or(0);
+    if !compatible_gpus.is_empty() {
+        gpu_dropdown.set_selected(selected_index as u32);
+    }
+    let graphics_detail = compatible_gpus
+        .get(selected_index)
+        .map(|device| format!("{} · {}", device.name, device.readiness()))
+        .unwrap_or_else(|| graphics_message.clone());
+    let graphics_detail_label = label(&graphics_detail, "setting-copy");
+    let graphics_detail_for_change = graphics_detail_label.clone();
+    let compatible_for_change = compatible_gpus.clone();
+    gpu_dropdown.connect_selected_notify(move |dropdown| {
+        if let Some(device) = compatible_for_change.get(dropdown.selected() as usize) {
+            graphics_detail_for_change.set_text(&format!(
+                "{} · {}",
+                device.name,
+                device.readiness()
+            ));
+        }
+    });
+    let performance_dropdown =
+        gtk::DropDown::from_strings(&["Balanced", "High performance", "Memory saver"]);
+    performance_dropdown.set_selected(match options.performance {
+        PerformanceMode::Balanced => 0,
+        PerformanceMode::Performance => 1,
+        PerformanceMode::MemorySaver => 2,
+    });
+    performance_dropdown.set_valign(gtk::Align::Center);
+    let fullscreen_switch = gtk::Switch::builder()
+        .active(options.fullscreen)
         .valign(gtk::Align::Center)
         .build();
     let block_switch = gtk::Switch::builder()
@@ -300,10 +486,22 @@ fn build_window(
         &address_entry,
     ));
     settings.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    settings.append(&setting_row_with_detail(
+        "Graphics device",
+        &graphics_detail_label,
+        &gpu_dropdown,
+    ));
+    settings.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     settings.append(&setting_row(
-        "Use NVIDIA MX130",
-        "Routes Vulkan and WebGPU through the dedicated graphics card.",
-        &gpu_switch,
+        "Session profile",
+        "Performance keeps the game responsive; Memory saver reduces processes.",
+        &performance_dropdown,
+    ));
+    settings.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    settings.append(&setting_row(
+        "Start fullscreen",
+        "Launch directly into a distraction-free fullscreen session.",
+        &fullscreen_switch,
     ));
     settings.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     settings.append(&setting_row(
@@ -320,6 +518,7 @@ fn build_window(
     let play = gtk::Button::with_label("Play V2 Fiveplay");
     play.add_css_class("play-button");
     play.set_hexpand(true);
+    play.set_sensitive(!compatible_gpus.is_empty());
     let browser_name = browser
         .file_name()
         .unwrap_or_else(|| OsStr::new("Chromium"))
@@ -332,10 +531,20 @@ fn build_window(
 
     let status_for_click = status.clone();
     let window_for_click = window.clone();
+    let compatible_for_click = compatible_gpus.clone();
     play.connect_clicked(move |_| {
+        let selected_index = gpu_dropdown.selected() as usize;
+        let Some(selected_gpu) = compatible_for_click.get(selected_index) else {
+            status_for_click.add_css_class("error-copy");
+            status_for_click.set_text("Select a compatible graphics device first.");
+            return;
+        };
         let launch_options = Options {
             ad_block: block_switch.is_active(),
-            integrated_gpu: !gpu_switch.is_active(),
+            fullscreen: fullscreen_switch.is_active(),
+            integrated_gpu: matches!(selected_gpu.kind, GpuKind::Integrated),
+            performance: PerformanceMode::from_index(performance_dropdown.selected()),
+            selected_gpu: Some(selected_gpu.name.clone()),
             url: address_entry.text().trim().to_owned(),
             ..options.clone()
         };
@@ -345,6 +554,11 @@ fn build_window(
             return;
         }
         if let Err(error) = save_url(&launch_options.url) {
+            status_for_click.add_css_class("error-copy");
+            status_for_click.set_text(&error);
+            return;
+        }
+        if let Err(error) = save_launch_preferences(&launch_options) {
             status_for_click.add_css_class("error-copy");
             status_for_click.set_text(&error);
             return;
@@ -378,6 +592,53 @@ fn build_window(
     window.present();
 }
 
+fn custom_titlebar(window: &gtk::ApplicationWindow) -> gtk::WindowHandle {
+    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    bar.add_css_class("custom-titlebar");
+
+    let mark = gtk::Label::new(Some("V"));
+    mark.set_halign(gtk::Align::Center);
+    mark.set_valign(gtk::Align::Center);
+    mark.add_css_class("title-mark");
+    let title = gtk::Label::new(Some("PLAY V2 FIVEPLAY"));
+    title.set_hexpand(true);
+    title.set_halign(gtk::Align::Start);
+    title.add_css_class("app-title");
+
+    let minimize = window_button("—", "Minimize");
+    let maximize = window_button("□", "Maximize or restore");
+    let close = window_button("×", "Close");
+    close.add_css_class("close-control");
+
+    let window_for_minimize = window.clone();
+    minimize.connect_clicked(move |_| window_for_minimize.minimize());
+    let window_for_maximize = window.clone();
+    maximize.connect_clicked(move |_| {
+        if window_for_maximize.is_maximized() {
+            window_for_maximize.unmaximize();
+        } else {
+            window_for_maximize.maximize();
+        }
+    });
+    let window_for_close = window.clone();
+    close.connect_clicked(move |_| window_for_close.close());
+
+    bar.append(&mark);
+    bar.append(&title);
+    bar.append(&minimize);
+    bar.append(&maximize);
+    bar.append(&close);
+    gtk::WindowHandle::builder().child(&bar).build()
+}
+
+fn window_button(symbol: &str, tooltip: &str) -> gtk::Button {
+    let button = gtk::Button::with_label(symbol);
+    button.set_tooltip_text(Some(tooltip));
+    button.set_focus_on_click(false);
+    button.add_css_class("window-control");
+    button
+}
+
 fn label(text: &str, class: &str) -> gtk::Label {
     let label = gtk::Label::new(Some(text));
     label.set_halign(gtk::Align::Start);
@@ -386,11 +647,10 @@ fn label(text: &str, class: &str) -> gtk::Label {
     label
 }
 
-fn feature_card(icon_name: &str, title: &str, copy: &str) -> gtk::Box {
+fn feature_card(symbol: &str, title: &str, copy: &str) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 7);
     card.add_css_class("feature-card");
-    let icon = gtk::Image::from_icon_name(icon_name);
-    icon.set_pixel_size(22);
+    let icon = gtk::Label::new(Some(symbol));
     icon.set_halign(gtk::Align::Start);
     icon.add_css_class("feature-icon");
     card.append(&icon);
@@ -400,12 +660,21 @@ fn feature_card(icon_name: &str, title: &str, copy: &str) -> gtk::Box {
 }
 
 fn setting_row(title: &str, copy: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let detail = label(copy, "setting-copy");
+    setting_row_with_detail(title, &detail, control)
+}
+
+fn setting_row_with_detail(
+    title: &str,
+    detail: &gtk::Label,
+    control: &impl IsA<gtk::Widget>,
+) -> gtk::Box {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 18);
     row.add_css_class("setting-row");
     let text = gtk::Box::new(gtk::Orientation::Vertical, 3);
     text.set_hexpand(true);
     text.append(&label(title, "setting-title"));
-    text.append(&label(copy, "setting-copy"));
+    text.append(detail);
     row.append(&text);
     row.append(control);
     row
@@ -421,31 +690,56 @@ fn profile_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "neither XDG_DATA_HOME nor HOME is set".to_owned())
 }
 
-fn config_file() -> Result<PathBuf, String> {
+fn config_file(name: &str) -> Result<PathBuf, String> {
     if let Some(path) = env::var_os("XDG_CONFIG_HOME") {
-        return Ok(PathBuf::from(path).join("fiveplayonlinux/launch-address"));
+        return Ok(PathBuf::from(path).join("fiveplayonlinux").join(name));
     }
     env::var_os("HOME")
         .map(PathBuf::from)
-        .map(|home| home.join(".config/fiveplayonlinux/launch-address"))
+        .map(|home| home.join(".config/fiveplayonlinux").join(name))
         .ok_or_else(|| "neither XDG_CONFIG_HOME nor HOME is set".to_owned())
 }
 
 fn load_saved_url() -> Option<String> {
-    let path = config_file().ok()?;
+    load_saved_value("launch-address")
+}
+
+fn load_saved_value(name: &str) -> Option<String> {
+    let path = config_file(name).ok()?;
     let value = fs::read_to_string(path).ok()?;
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
 }
 
 fn save_url(url: &str) -> Result<(), String> {
-    let path = config_file()?;
+    save_config_value("launch-address", url)
+}
+
+fn save_launch_preferences(options: &Options) -> Result<(), String> {
+    let performance = match options.performance {
+        PerformanceMode::Balanced => "balanced",
+        PerformanceMode::Performance => "performance",
+        PerformanceMode::MemorySaver => "memory-saver",
+    };
+    save_config_value("performance", performance)?;
+    save_config_value(
+        "fullscreen",
+        if options.fullscreen { "true" } else { "false" },
+    )?;
+    if let Some(gpu) = &options.selected_gpu {
+        save_config_value("graphics-device", gpu)?;
+    }
+    Ok(())
+}
+
+fn save_config_value(name: &str, value: &str) -> Result<(), String> {
+    let path = config_file(name)?;
     let parent = path
         .parent()
         .ok_or_else(|| "invalid configuration path".to_owned())?;
     fs::create_dir_all(parent)
         .map_err(|error| format!("cannot create local configuration: {error}"))?;
-    fs::write(&path, format!("{url}\n"))
+    fs::write(&path, format!("{value}\n"))
         .map_err(|error| format!("cannot save local configuration: {error}"))
 }
 
@@ -529,7 +823,18 @@ mod tests {
     #[test]
     fn nvidia_prime_environment_is_complete() {
         let mut command = Command::new("browser");
-        configure_nvidia_prime(&mut command);
+        let selected_gpu = GpuInfo {
+            name: "NVIDIA test device".to_owned(),
+            kind: GpuKind::Discrete,
+            vendor_id: 0x10de,
+            device_id: 0x174d,
+            api_version: ash::vk::API_VERSION_1_3,
+            device_local_memory: 2 * 1024 * 1024 * 1024,
+            bc_compression: true,
+            graphics_queue: true,
+            max_texture_size: 16384,
+        };
+        configure_gpu(&mut command, &selected_gpu);
         let variables: Vec<_> = command
             .get_envs()
             .map(|(key, value)| (key.to_owned(), value.map(OsStr::to_owned)))
@@ -539,6 +844,7 @@ mod tests {
             ("__NV_PRIME_RENDER_OFFLOAD", "1"),
             ("__VK_LAYER_NV_optimus", "NVIDIA_only"),
             ("VK_LOADER_DRIVERS_SELECT", "*nvidia*"),
+            ("DRI_PRIME", "1"),
         ] {
             assert!(variables.iter().any(|(actual_key, actual_value)| {
                 actual_key == OsStr::new(key) && actual_value.as_deref() == Some(OsStr::new(value))
@@ -549,12 +855,19 @@ mod tests {
     #[test]
     fn ad_blocker_is_enabled_by_default() {
         let mut command = Command::new("browser");
-        add_browser_args(
-            &mut command,
-            Path::new("/tmp/profile"),
-            "https://example.invalid/launcher",
-            true,
-        );
+        let options = Options {
+            ad_block: true,
+            browser: None,
+            direct_launch: false,
+            dry_run: false,
+            fullscreen: false,
+            graphics_check: false,
+            integrated_gpu: false,
+            performance: PerformanceMode::Balanced,
+            selected_gpu: None,
+            url: "https://example.invalid/launcher".to_owned(),
+        };
+        add_browser_args(&mut command, Path::new("/tmp/profile"), &options);
         let args: Vec<_> = command
             .get_args()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -565,5 +878,35 @@ mod tests {
             .expect("ad-block resolver rules missing");
         assert!(rules.contains("quge5.com"));
         assert!(rules.contains("alwingulla.com"));
+    }
+
+    #[test]
+    fn performance_and_fullscreen_flags_are_applied() {
+        let mut command = Command::new("browser");
+        let options = Options {
+            ad_block: false,
+            browser: None,
+            direct_launch: false,
+            dry_run: false,
+            fullscreen: true,
+            graphics_check: false,
+            integrated_gpu: false,
+            performance: PerformanceMode::Performance,
+            selected_gpu: None,
+            url: "https://example.invalid/launcher".to_owned(),
+        };
+        add_browser_args(&mut command, Path::new("/tmp/profile"), &options);
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        for expected in [
+            "--start-fullscreen",
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            "--renderer-process-limit=8",
+        ] {
+            assert!(args.iter().any(|arg| arg == expected));
+        }
     }
 }

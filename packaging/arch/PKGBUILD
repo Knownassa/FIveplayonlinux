@@ -1,10 +1,10 @@
 pkgname=fiveplayonlinux
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='Native Linux client for Play V2 Fiveplay'
 arch=('x86_64')
 license=('MIT')
-depends=('gtk4')
+depends=('gtk4' 'vulkan-icd-loader')
 makedepends=('cargo' 'pkgconf')
 optdepends=('chromium: supported browser engine')
 source=()
